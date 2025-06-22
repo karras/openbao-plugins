@@ -22,6 +22,7 @@ _None available at this time._
 - **Azure** – Generate Azure service principals with role and group assignments.
 - **GCP** – Generate GCP service account keys and Oauth tokens based on IAM policies.
 - **GCPKMS** – Encrypt data and manage keys via GCP KMS.
+- **NOMAD** - Generate Nomad ACL tokens.
 
 ## Development
 
