@@ -16,8 +16,8 @@ import (
 
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/mitchellh/mapstructure"
-	"github.com/openbao/openbao/sdk/helper/docker"
-	"github.com/openbao/openbao/sdk/logical"
+	"github.com/openbao/openbao/sdk/v2/helper/docker"
+	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
 type Config struct {

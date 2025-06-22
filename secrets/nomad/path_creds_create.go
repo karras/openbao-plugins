@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/nomad/api"
-	"github.com/openbao/openbao/sdk/framework"
-	"github.com/openbao/openbao/sdk/logical"
+	"github.com/openbao/openbao/sdk/v2/framework"
+	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
 // maxTokenNameLength is the maximum length for the name of a Nomad access
