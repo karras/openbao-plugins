@@ -1,17 +1,11 @@
----
-layout: docs
-page_title: Consul - Secrets Engines
-description: The Consul secrets engine for OpenBao generates tokens for Consul dynamically.
----
-
 # Consul secrets engine
 
 The Consul secrets engine generates [Consul](https://www.consul.io/) API tokens
 dynamically based on Consul ACL policies.
 
--> **Note:** See the Consul Agent [config
-documentation](https://developer.hashicorp.com/consul/docs/reference/agent/configuration-file/acl)
-for details on how to enable Consul's ACL system.
+> [!NOTE]
+> See the Consul Agent [config documentation](https://developer.hashicorp.com/consul/docs/reference/agent/configuration-file/acl)
+> for details on how to enable Consul's ACL system.
 
 ## Setup
 
@@ -52,11 +46,12 @@ management tool.
         Success! Data written to: consul/config/access
         ```
 
-        ~> **Note:** OpenBao will silently store the bootstrap token as the
-        configuration token when it performs the automatic bootstrap; it will
-        not be presented to the user. If you need another management token, you
-        will need to generate one by writing a OpenBao role with the
-        `global-management` policy and then reading new creds back from it.
+        > [!NOTE]
+        > OpenBao will silently store the bootstrap token as the
+        > configuration token when it performs the automatic bootstrap; it will
+        > not be presented to the user. If you need another management token,
+        > you will need to generate one by writing a OpenBao role with the
+        > `global-management` policy and then reading new creds back from it.
 
     1. Configuring OpenBao after manually bootstrapping the Consul ACL system:
 
@@ -158,11 +153,12 @@ management tool.
         Success! Data written to: consul/roles/my-role
         ```
 
-        -> **Token lease duration:** If you do not specify a value for `ttl` (or
-        `lease` for Consul versions below 1.4) the tokens created using
-        OpenBao's Consul secrets engine are created with a Time To Live (TTL) of
-        30 days. You can change the lease duration by passing `-ttl=<duration>`
-        to the command above.
+       > [!IMPORTANT]
+       > If you do not specify a value for `ttl` (or
+       >  `lease` for Consul versions below 1.4) the tokens created using
+       > OpenBao's Consul secrets engine are created with a Time To Live (TTL)
+       > of 30 days. You can change the lease duration by passing
+       > `-ttl=<duration>` to the command above.
 
 1.  You may further limit a role's access by adding the optional parameters
     `consul_namespace` and `partition`. Please refer to Consul's [namespace
@@ -207,12 +203,13 @@ partition           admin1
 token               642783bf-1540-526f-d4de-fe1ac1aed6f0
 ```
 
-!> **Expired token rotation:** Once a token's TTL expires, then Consul
-operations will no longer be allowed with it. This requires you to have an
-external process to rotate tokens. At this time, the recommended approach for
-operators is to rotate the tokens manually by creating a new token using the
-`bao read consul/creds/my-role` command. Once the token is synchronized with
-Consul, apply the token to the agents using the Consul API or CLI.
+> [!WARNING]
+> **Expired token rotation:** Once a token's TTL expires, then Consul
+> operations will no longer be allowed with it. This requires you to have an
+> external process to rotate tokens. At this time, the recommended approach for
+> operators is to rotate the tokens manually by creating a new token using the
+> `bao read consul/creds/my-role` command. Once the token is synchronized with
+> Consul, apply the token to the agents using the Consul API or CLI.
 
 ## API
 
