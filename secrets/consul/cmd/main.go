@@ -4,11 +4,11 @@
 package main
 
 import (
+	"log"
 	"os"
 
-	hclog "github.com/hashicorp/go-hclog"
+	consulsecrets "github.com/openbao/openbao-plugins/secrets/consul"
 	"github.com/openbao/openbao/api/v2"
-	"github.com/openbao/openbao-plugins/secrets/consul"
 	"github.com/openbao/openbao/sdk/v2/plugin"
 )
 
@@ -20,15 +20,14 @@ func main() {
 	tlsConfig := apiClientMeta.GetTLSConfig()
 	tlsProviderFunc := api.VaultPluginTLSProvider(tlsConfig)
 
-	if err := plugin.ServeMultiplex(&plugin.ServeOpts{
-		BackendFactoryFunc: consul.Factory,
+	err := plugin.ServeMultiplex(&plugin.ServeOpts{
+		BackendFactoryFunc: consulsecrets.Factory,
 		// set the TLSProviderFunc so that the plugin maintains backwards
 		// compatibility with Vault versions that don’t support plugin AutoMTLS
 		TLSProviderFunc: tlsProviderFunc,
-	}); err != nil {
-		logger := hclog.New(&hclog.LoggerOptions{})
-
-		logger.Error("plugin shutting down", "error", err)
+	})
+	if err != nil {
+		log.Println(err)
 		os.Exit(1)
 	}
 }

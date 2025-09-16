@@ -15,10 +15,10 @@ import (
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
-	"github.com/openbao/openbao-plugins/secrets/consul/testhelpers"
+	"github.com/mitchellh/mapstructure"
+	consul "github.com/openbao/openbao-plugins/secrets/consul/testhelpers"
 	logicaltest "github.com/openbao/openbao/helper/testhelpers/logical"
 	"github.com/openbao/openbao/sdk/v2/logical"
-	"github.com/mitchellh/mapstructure"
 )
 
 func TestBackend_Config_Access(t *testing.T) {
@@ -273,6 +273,9 @@ func testBackendRenewRevoke14(t *testing.T, version string, policiesParam string
 		Data:      connData,
 	}
 	roleResp, err := b.HandleRequest(context.Background(), read)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	expectExtract := roleResp.Data["consul_policies"]
 	respExtract := roleResp.Data[policiesParam]
@@ -352,6 +355,52 @@ func testBackendRenewRevoke14(t *testing.T, version string, policiesParam string
 	if err == nil {
 		t.Fatal("err: expected error")
 	}
+
+	t.Run("revoking missing token", func(t *testing.T) {
+		// read new token
+		req.Operation = logical.ReadOperation
+		req.Path = "creds/test"
+		resp, err = b.HandleRequest(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp == nil {
+			t.Fatal("resp nil")
+		}
+		if resp.IsError() {
+			t.Fatalf("resp is error: %v", resp.Error())
+		}
+
+		if err := mapstructure.Decode(resp.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+
+		// Delete token using consul api
+		consulapiConfig.Token = consulConfig.Token
+		client, err = consulapi.NewClient(consulapiConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = client.ACL().TokenDelete(d.Accessor, &consulapi.WriteOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// revoke
+		req.Operation = logical.RevokeOperation
+		req.Secret = resp.Secret
+		_, err = b.HandleRequest(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp == nil {
+			t.Fatal("resp nil")
+		}
+		if resp.IsError() {
+			t.Fatalf("resp is error: %v", resp.Error())
+		}
+	})
 }
 
 func TestBackend_LocalToken(t *testing.T) {
@@ -660,7 +709,7 @@ func testAccStepReadManagementToken(t *testing.T, name string, conf map[string]i
 			}
 
 			log.Printf("[WARN] Verifying that the generated token works...")
-			_, _, err = client.ACL().Create(&consulapi.ACLEntry{
+			_, _, err = client.ACL().Create(&consulapi.ACLEntry{ //nolint:staticcheck
 				Type: "management",
 				Name: "test2",
 			}, nil)
@@ -1399,7 +1448,7 @@ func TestBackendRenewRevokeRolesAndIdentities(t *testing.T) {
 		Path:      "config/access",
 		Data:      connData,
 	}
-	resp, err := b.HandleRequest(context.Background(), req)
+	_, err = b.HandleRequest(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1531,14 +1580,14 @@ func TestBackendRenewRevokeRolesAndIdentities(t *testing.T) {
 		req.Operation = logical.UpdateOperation
 		req.Path = fmt.Sprintf("roles/%s", tc.RoleName)
 		req.Data = tc.RoleData
-		resp, err = b.HandleRequest(context.Background(), req)
+		_, err = b.HandleRequest(context.Background(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		req.Operation = logical.ReadOperation
 		req.Path = fmt.Sprintf("creds/%s", tc.RoleName)
-		resp, err = b.HandleRequest(context.Background(), req)
+		resp, err := b.HandleRequest(context.Background(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1585,7 +1634,7 @@ func TestBackendRenewRevokeRolesAndIdentities(t *testing.T) {
 		}
 
 		req.Operation = logical.RevokeOperation
-		resp, err = b.HandleRequest(context.Background(), req)
+		_, err = b.HandleRequest(context.Background(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1595,6 +1644,9 @@ func TestBackendRenewRevokeRolesAndIdentities(t *testing.T) {
 		consulmgmtConfig.Address = connData["address"].(string)
 		consulmgmtConfig.Token = connData["token"].(string)
 		mgmtclient, err := consulapi.NewClient(consulmgmtConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		q := &consulapi.QueryOptions{
 			Datacenter: "DC1",
