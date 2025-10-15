@@ -1,6 +1,3 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package github
 
 import (
@@ -19,41 +16,105 @@ type CLIHandler struct {
 }
 
 func (h *CLIHandler) Auth(c *api.Client, m map[string]string) (*api.Secret, error) {
+	mount := h.getMountPath(m)
+	token, err := h.getToken(m)
+	if err != nil {
+		return nil, err
+	}
+
+	return h.performLogin(c, mount, token)
+}
+
+// getMountPath retrieves the mount path from the configuration, defaulting to "github"
+func (h *CLIHandler) getMountPath(m map[string]string) string {
 	mount, ok := m["mount"]
 	if !ok {
 		mount = "github"
 	}
+	return mount
+}
 
-	// Extract or prompt for token
+// getToken retrieves the GitHub token from config, environment, or interactive prompt
+func (h *CLIHandler) getToken(m map[string]string) (string, error) {
+	// Try to get token from configuration
 	token := m["token"]
-	if token == "" {
-		token = os.Getenv("VAULT_AUTH_GITHUB_TOKEN")
-	}
-	if token == "" {
-		// Override the output
-		stdout := h.testStdout
-		if stdout == nil {
-			stdout = os.Stderr
-		}
-
-		var err error
-		fmt.Fprintf(stdout, "GitHub Personal Access Token (will be hidden): ")
-		token, err = password.Read(os.Stdin)
-		fmt.Fprintf(stdout, "\n")
-		if err != nil {
-			if err == password.ErrInterrupted {
-				return nil, fmt.Errorf("user interrupted")
-			}
-
-			return nil, fmt.Errorf("An error occurred attempting to "+
-				"ask for a token. The raw error message is shown below, but usually "+
-				"this is because you attempted to pipe a value into the command or "+
-				"you are executing outside of a terminal (tty). If you want to pipe "+
-				"the value, pass \"-\" as the argument to read from stdin. The raw "+
-				"error was: %w", err)
-		}
+	if token != "" {
+		return token, nil
 	}
 
+	// Try to get token from environment variable
+	token = os.Getenv("VAULT_AUTH_GITHUB_TOKEN")
+	if token != "" {
+		return token, nil
+	}
+
+	// Prompt user for token interactively
+	return h.promptForToken()
+}
+
+// promptForToken prompts the user to enter their GitHub token interactively
+func (h *CLIHandler) promptForToken() (string, error) {
+	stdout := h.getStdout()
+
+	// Display prompt
+	if err := h.writePrompt(stdout); err != nil {
+		return "", err
+	}
+
+	// Read token from stdin (hidden)
+	token, err := password.Read(os.Stdin)
+	if err != nil {
+		return "", h.handlePasswordReadError(err)
+	}
+
+	// Write newline after hidden input
+	if err := h.writeNewline(stdout); err != nil {
+		return "", err
+	}
+
+	return token, nil
+}
+
+// getStdout returns the output writer for prompts, defaulting to stderr
+func (h *CLIHandler) getStdout() io.Writer {
+	if h.testStdout != nil {
+		return h.testStdout
+	}
+	return os.Stderr
+}
+
+// writePrompt writes the token prompt to the output
+func (h *CLIHandler) writePrompt(w io.Writer) error {
+	if _, err := fmt.Fprintf(w, "GitHub Personal Access Token (will be hidden): "); err != nil {
+		return fmt.Errorf("failed to write prompt: %w", err)
+	}
+	return nil
+}
+
+// writeNewline writes a newline after the hidden password input
+func (h *CLIHandler) writeNewline(w io.Writer) error {
+	if _, err := fmt.Fprintf(w, "\n"); err != nil {
+		return fmt.Errorf("failed to write newline: %w", err)
+	}
+	return nil
+}
+
+// handlePasswordReadError handles errors from reading password input
+func (h *CLIHandler) handlePasswordReadError(err error) error {
+	if err == password.ErrInterrupted {
+		return fmt.Errorf("user interrupted")
+	}
+
+	return fmt.Errorf("an error occurred attempting to "+
+		"ask for a token; the raw error message is shown below, but usually "+
+		"this is because you attempted to pipe a value into the command or "+
+		"you are executing outside of a terminal (tty); if you want to pipe "+
+		"the value, pass \"-\" as the argument to read from stdin; the raw "+
+		"error was: %w", err)
+}
+
+// performLogin executes the login request with the GitHub token
+func (h *CLIHandler) performLogin(c *api.Client, mount, token string) (*api.Secret, error) {
 	path := fmt.Sprintf("auth/%s/login", mount)
 	secret, err := c.Logical().Write(path, map[string]interface{}{
 		"token": strings.TrimSpace(token),

@@ -1,11 +1,7 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package github
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 
@@ -15,6 +11,32 @@ import (
 	"github.com/openbao/openbao/sdk/v2/helper/policyutil"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
+
+const (
+	// GitHub API pagination constants
+	defaultPerPage = 100
+)
+
+// AuthenticationError represents errors during GitHub authentication
+type AuthenticationError struct {
+	Reason  string
+	Details string
+}
+
+func (e *AuthenticationError) Error() string {
+	if e.Details != "" {
+		return fmt.Sprintf("%s: %s", e.Reason, e.Details)
+	}
+	return e.Reason
+}
+
+// newAuthError creates a new authentication error
+func newAuthError(reason, details string) *AuthenticationError {
+	return &AuthenticationError{
+		Reason:  reason,
+		Details: details,
+	}
+}
 
 func pathLogin(b *backend) *framework.Path {
 	return &framework.Path{
@@ -78,7 +100,9 @@ func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *fra
 			Name: *verifyResp.User.Login,
 		},
 	}
-	verifyResp.Config.PopulateTokenAuth(auth)
+	if err := verifyResp.Config.PopulateTokenAuth(auth, req); err != nil {
+		return nil, fmt.Errorf("failed to populate token auth: %w", err)
+	}
 
 	// Add in configured policies from user/group mapping
 	if len(verifyResp.Policies) > 0 {
@@ -140,27 +164,115 @@ func (b *backend) pathLoginRenew(ctx context.Context, req *logical.Request, d *f
 	return resp, nil
 }
 
+// verifyCredentials authenticates and authorizes a GitHub user token.
+// It performs the complete authentication flow:
+// 1. Loads and validates configuration
+// 2. Validates request source (CIDR check)
+// 3. Authenticates with GitHub
+// 4. Verifies organization membership
+// 5. Resolves team memberships and policies
 func (b *backend) verifyCredentials(ctx context.Context, req *logical.Request, token string) (*verifyCredentialsResp, error) {
-	var warnings []string
-	config, err := b.Config(ctx, req.Storage)
+	// Load and validate configuration
+	config, err := b.loadAndValidateConfig(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	if config == nil {
-		return nil, errors.New("configuration has not been set")
+
+	// Create authenticated GitHub client
+	client, err := b.createConfiguredClient(ctx, req.Storage, token, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GitHub client: %w", err)
 	}
 
-	// Check for a CIDR match.
+	// Authenticate and authorize the user
+	user, org, warnings, err := b.authenticateAndAuthorizeUser(ctx, req, client, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve user's team memberships and policies
+	teamNames, policies, err := b.resolveUserPolicies(ctx, req.Storage, client, org, user)
+	if err != nil {
+		return nil, err
+	}
+
+	return &verifyCredentialsResp{
+		User:      user,
+		Org:       org,
+		Policies:  policies,
+		TeamNames: teamNames,
+		Config:    config,
+		Warnings:  warnings,
+	}, nil
+}
+
+// loadAndValidateConfig loads the backend configuration and validates the request source
+func (b *backend) loadAndValidateConfig(ctx context.Context, req *logical.Request) (*config, error) {
+	config, err := b.Config(ctx, req.Storage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
+	}
+	if config == nil {
+		return nil, newAuthError("configuration not set", "GitHub auth backend has not been configured")
+	}
+
+	// Check for CIDR restrictions
+	if err := b.checkCIDRMatch(req, config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+// authenticateAndAuthorizeUser performs GitHub user authentication and organization authorization
+func (b *backend) authenticateAndAuthorizeUser(ctx context.Context, req *logical.Request, client *github.Client, config *config) (*github.User, *github.Organization, []string, error) {
+	// Get the authenticated user from GitHub
+	user, err := b.getGitHubUser(ctx, client)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to get GitHub user: %w", err)
+	}
+
+	// Verify the user is a member of the required organization
+	org, warnings, err := b.checkOrganizationMembership(ctx, client, user, config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return user, org, warnings, nil
+}
+
+// resolveUserPolicies resolves the user's team memberships and associated policies
+func (b *backend) resolveUserPolicies(ctx context.Context, storage logical.Storage, client *github.Client, org *github.Organization, user *github.User) ([]string, []string, error) {
+	// Get all teams the user belongs to in the organization
+	teamNames, err := b.getUserTeams(ctx, client, org, user)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get user teams: %w", err)
+	}
+
+	// Get policies mapped to the user's teams and username
+	policies, err := b.getPoliciesForUser(ctx, storage, teamNames, user.GetLogin())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get policies: %w", err)
+	}
+
+	return teamNames, policies, nil
+}
+
+// checkCIDRMatch verifies the request comes from an allowed CIDR
+func (b *backend) checkCIDRMatch(req *logical.Request, config *config) error {
 	if len(config.TokenBoundCIDRs) > 0 {
 		if req.Connection == nil {
-			b.Logger().Error("token bound CIDRs found but no connection information available for validation")
-			return nil, logical.ErrPermissionDenied
+			return logical.ErrPermissionDenied
 		}
 		if !cidrutil.RemoteAddrIsOk(req.Connection.RemoteAddr, config.TokenBoundCIDRs) {
-			return nil, logical.ErrPermissionDenied
+			return logical.ErrPermissionDenied
 		}
 	}
+	return nil
+}
 
+// createConfiguredClient creates a GitHub client with proper configuration
+func (b *backend) createConfiguredClient(ctx context.Context, storage logical.Storage, token string, config *config) (*github.Client, error) {
 	client, err := b.Client(token)
 	if err != nil {
 		return nil, err
@@ -169,133 +281,187 @@ func (b *backend) verifyCredentials(ctx context.Context, req *logical.Request, t
 	if config.BaseURL != "" {
 		parsedURL, err := url.Parse(config.BaseURL)
 		if err != nil {
-			return nil, fmt.Errorf("successfully parsed base_url when set but failing to parse now: %w", err)
+			return nil, fmt.Errorf("failed to parse configured base_url: %w", err)
 		}
 		client.BaseURL = parsedURL
 	}
 
+	// Handle organization ID auto-setup if needed
 	if config.OrganizationID == 0 {
-		// Previously we did not verify using the Org ID. So if the Org ID is
-		// not set, we will trust-on-first-use and set it now.
-		err = config.setOrganizationID(ctx, client)
-		if err != nil {
-			b.Logger().Error("failed to set the organization_id on login", "error", err)
+		if err := b.setupOrganizationID(ctx, storage, client, config); err != nil {
 			return nil, err
 		}
-		entry, err := logical.StorageEntryJSON("config", config)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := req.Storage.Put(ctx, entry); err != nil {
-			return nil, err
-		}
-
-		b.Logger().Info("set ID on a trust-on-first-use basis", "organization_id", config.OrganizationID)
 	}
 
-	// Get the user
+	return client, nil
+}
+
+// setupOrganizationID sets up the organization ID if it's missing from config
+func (b *backend) setupOrganizationID(ctx context.Context, storage logical.Storage, client *github.Client, config *config) error {
+	err := config.setOrganizationID(ctx, client)
+	if err != nil {
+		return fmt.Errorf("failed to set the organization_id on login for organization '%s': %w", config.Organization, err)
+	}
+
+	entry, err := logical.StorageEntryJSON("config", config)
+	if err != nil {
+		return fmt.Errorf("failed to create storage entry: %w", err)
+	}
+
+	if err := storage.Put(ctx, entry); err != nil {
+		return fmt.Errorf("failed to store updated config: %w", err)
+	}
+
+	return nil
+}
+
+// getGitHubUser retrieves the current user from GitHub API
+func (b *backend) getGitHubUser(ctx context.Context, client *github.Client) (*github.User, error) {
 	user, _, err := client.Users.Get(ctx, "")
+	if err != nil {
+		return nil, newAuthError("failed to get user from GitHub", err.Error())
+	}
+	if user.Login == nil {
+		return nil, newAuthError("invalid user response", "user login is nil")
+	}
+	return user, nil
+}
+
+// checkOrganizationMembership verifies the user is a member of the required organization
+func (b *backend) checkOrganizationMembership(ctx context.Context, client *github.Client, user *github.User, config *config) (*github.Organization, []string, error) {
+	var warnings []string
+
+	// First, get the organization details
+	org, _, err := client.Organizations.Get(ctx, config.Organization)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get organization %q: %w", config.Organization, err)
+	}
+
+	// Verify the organization ID matches our config
+	if org.GetID() != config.OrganizationID {
+		return nil, nil, newAuthError("organization ID mismatch",
+			fmt.Sprintf("organization '%s' has ID %d, but config expects ID %d",
+				config.Organization, org.GetID(), config.OrganizationID))
+	}
+
+	// Check membership using the more efficient GetOrgMembership API
+	membership, _, err := client.Organizations.GetOrgMembership(ctx, user.GetLogin(), config.Organization)
+	if err != nil {
+		// Handle different error cases
+		if githubErr, ok := err.(*github.ErrorResponse); ok {
+			switch githubErr.Response.StatusCode {
+			case 404:
+				// User is not a member or membership is private
+				return nil, nil, newAuthError("user is not part of required org",
+					fmt.Sprintf("user '%s' is not a member of organization '%s' or membership is private",
+						user.GetLogin(), config.Organization))
+			case 403:
+				// Requester lacks permission to view membership
+				return nil, nil, newAuthError("insufficient permissions",
+					fmt.Sprintf("insufficient permissions to check membership for user '%s' in organization '%s'",
+						user.GetLogin(), config.Organization))
+			default:
+				return nil, nil, fmt.Errorf("failed to check organization membership: %w", err)
+			}
+		}
+		return nil, nil, fmt.Errorf("failed to check organization membership: %w", err)
+	}
+
+	// Verify the membership is active
+	membershipState := membership.GetState()
+	if membershipState != "active" {
+		return nil, nil, newAuthError("user membership not active",
+			fmt.Sprintf("user '%s' membership in organization '%s' is not active (state: %s)",
+				user.GetLogin(), config.Organization, membershipState))
+	}
+
+	return org, warnings, nil
+}
+
+// getUserTeams gets all teams for the user in the specified organization
+func (b *backend) getUserTeams(ctx context.Context, client *github.Client, org *github.Organization, user *github.User) ([]string, error) {
+	teams, err := b.fetchUserTeamsForOrg(ctx, client, org)
 	if err != nil {
 		return nil, err
 	}
+	return b.extractTeamNames(teams), nil
+}
 
-	// Verify that the user is part of the organization
-	var org *github.Organization
-
-	orgOpt := &github.ListOptions{
-		PerPage: 100,
-	}
-
-	var allOrgs []*github.Organization
-	for {
-		orgs, resp, err := client.Organizations.List(ctx, "", orgOpt)
-		if err != nil {
-			return nil, err
-		}
-		allOrgs = append(allOrgs, orgs...)
-		if resp.NextPage == 0 {
-			break
-		}
-		orgOpt.Page = resp.NextPage
-	}
-
-	orgLoginName := ""
-	for _, o := range allOrgs {
-		if o.GetID() == config.OrganizationID {
-			org = o
-			orgLoginName = *o.Login
-			break
-		}
-	}
-	if org == nil {
-		return nil, errors.New("user is not part of required org")
-	}
-
-	if orgLoginName != config.Organization {
-		warningMsg := fmt.Sprintf(
-			"the organization name has changed to %q. It is recommended to verify and update the organization name in the config: %s=%d",
-			orgLoginName,
-			"organization_id",
-			config.OrganizationID,
-		)
-		b.Logger().Warn(warningMsg)
-		warnings = append(warnings, warningMsg)
-	}
-
-	// Get the teams that this user is part of to determine the policies
-	var teamNames []string
+// fetchUserTeamsForOrg retrieves all teams for a user in a specific organization
+// using pagination to handle large team lists efficiently
+func (b *backend) fetchUserTeamsForOrg(ctx context.Context, client *github.Client, org *github.Organization) ([]*github.Team, error) {
+	var allTeams []*github.Team
 
 	teamOpt := &github.ListOptions{
-		PerPage: 100,
+		PerPage: defaultPerPage,
 	}
 
-	var allTeams []*github.Team
+	// More efficient approach: Get user's teams directly for the specific organization
+	// This avoids listing ALL user teams across ALL organizations and then filtering
 	for {
 		teams, resp, err := client.Teams.ListUserTeams(ctx, teamOpt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to list user teams: %w", err)
 		}
-		allTeams = append(allTeams, teams...)
+
+		// Only include teams from the specified organization
+		allTeams = append(allTeams, b.filterTeamsByOrg(teams, org)...)
+
 		if resp.NextPage == 0 {
 			break
 		}
 		teamOpt.Page = resp.NextPage
 	}
 
-	for _, t := range allTeams {
-		// We only care about teams that are part of the organization we use
-		if *t.Organization.ID != *org.ID {
-			continue
+	return allTeams, nil
+}
+
+// filterTeamsByOrg filters teams to only include those from the specified organization
+func (b *backend) filterTeamsByOrg(teams []*github.Team, org *github.Organization) []*github.Team {
+	var filtered []*github.Team
+	for _, t := range teams {
+		if t.Organization != nil && t.Organization.ID != nil && *t.Organization.ID == *org.ID {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+// extractTeamNames extracts both name and slug from teams for policy mapping.
+// GitHub teams can have different names and slugs (URL-friendly names).
+// We include both to support policy mappings using either identifier.
+func (b *backend) extractTeamNames(teams []*github.Team) []string {
+	var teamNames []string
+
+	for _, t := range teams {
+		// Always include the team name if available
+		if t.Name != nil {
+			teamNames = append(teamNames, *t.Name)
 		}
 
-		// Append the names so we can get the policies
-		teamNames = append(teamNames, *t.Name)
-		if *t.Name != *t.Slug {
+		// Include the slug only if it differs from the name
+		// This allows policies to be mapped to either the display name or URL slug
+		if t.Slug != nil && t.Name != nil && *t.Name != *t.Slug {
 			teamNames = append(teamNames, *t.Slug)
 		}
 	}
 
-	groupPoliciesList, err := b.TeamMap.Policies(ctx, req.Storage, teamNames...)
+	return teamNames
+}
+
+// getPoliciesForUser retrieves policies for teams and user
+func (b *backend) getPoliciesForUser(ctx context.Context, storage logical.Storage, teamNames []string, username string) ([]string, error) {
+	groupPoliciesList, err := b.TeamMap.Policies(ctx, storage, teamNames...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get team policies: %w", err)
 	}
 
-	userPoliciesList, err := b.UserMap.Policies(ctx, req.Storage, []string{*user.Login}...)
+	userPoliciesList, err := b.UserMap.Policies(ctx, storage, []string{username}...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get user policies: %w", err)
 	}
 
-	verifyResp := &verifyCredentialsResp{
-		User:      user,
-		Org:       org,
-		Policies:  append(groupPoliciesList, userPoliciesList...),
-		TeamNames: teamNames,
-		Config:    config,
-		Warnings:  warnings,
-	}
-
-	return verifyResp, nil
+	return append(groupPoliciesList, userPoliciesList...), nil
 }
 
 type verifyCredentialsResp struct {

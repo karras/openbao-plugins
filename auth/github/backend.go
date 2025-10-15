@@ -1,14 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package github
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 
 	"github.com/google/go-github/github"
-	cleanhttp "github.com/hashicorp/go-cleanhttp"
+	"github.com/hashicorp/go-cleanhttp"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"golang.org/x/oauth2"
@@ -24,43 +22,62 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 	return b, nil
 }
 
+// setupPolicyMap creates and configures a PolicyMap for teams or users.
+// It sets up the policy map with proper display attributes and operation handlers,
+// migrating from the deprecated Callbacks API to the Operations API.
+func setupPolicyMap(name, mappingSuffix string) (*framework.PolicyMap, []*framework.Path) {
+	policyMap := &framework.PolicyMap{
+		PathMap: framework.PathMap{
+			Name: name,
+		},
+		DefaultKey: "default",
+	}
+
+	paths := policyMap.Paths()
+
+	// Configure display attributes for the list endpoint
+	paths[0].DisplayAttrs = &framework.DisplayAttributes{
+		OperationPrefix: operationPrefixGithub,
+		OperationSuffix: name,
+	}
+
+	// Configure display attributes for the mapping endpoint
+	paths[1].DisplayAttrs = &framework.DisplayAttributes{
+		OperationPrefix: operationPrefixGithub,
+		OperationSuffix: mappingSuffix,
+	}
+
+	// Migrate from deprecated Callbacks to Operations API
+	paths[0].Operations = map[logical.Operation]framework.OperationHandler{
+		logical.ListOperation: &framework.PathOperation{
+			Callback: paths[0].Callbacks[logical.ListOperation],
+			Summary:  paths[0].HelpSynopsis,
+		},
+		logical.ReadOperation: &framework.PathOperation{
+			Callback: paths[0].Callbacks[logical.ReadOperation],
+			Summary:  paths[0].HelpSynopsis,
+			DisplayAttrs: &framework.DisplayAttributes{
+				OperationVerb:   "list",
+				OperationSuffix: name + "2", // The ReadOperation is redundant with the ListOperation
+			},
+		},
+	}
+
+	// Clear deprecated Callbacks after migration
+	paths[0].Callbacks = nil
+
+	return policyMap, paths
+}
+
 func Backend() *backend {
 	var b backend
-	b.TeamMap = &framework.PolicyMap{
-		PathMap: framework.PathMap{
-			Name: "teams",
-		},
-		DefaultKey: "default",
-	}
 
-	teamMapPaths := b.TeamMap.Paths()
+	// Setup policy maps for teams and users
+	teamMap, teamMapPaths := setupPolicyMap("teams", "team-mapping")
+	b.TeamMap = teamMap
 
-	teamMapPaths[0].DisplayAttrs = &framework.DisplayAttributes{
-		OperationPrefix: operationPrefixGithub,
-		OperationSuffix: "teams",
-	}
-	teamMapPaths[1].DisplayAttrs = &framework.DisplayAttributes{
-		OperationPrefix: operationPrefixGithub,
-		OperationSuffix: "team-mapping",
-	}
-
-	b.UserMap = &framework.PolicyMap{
-		PathMap: framework.PathMap{
-			Name: "users",
-		},
-		DefaultKey: "default",
-	}
-
-	userMapPaths := b.UserMap.Paths()
-
-	userMapPaths[0].DisplayAttrs = &framework.DisplayAttributes{
-		OperationPrefix: operationPrefixGithub,
-		OperationSuffix: "users",
-	}
-	userMapPaths[1].DisplayAttrs = &framework.DisplayAttributes{
-		OperationPrefix: operationPrefixGithub,
-		OperationSuffix: "user-mapping",
-	}
+	userMap, userMapPaths := setupPolicyMap("users", "user-mapping")
+	b.UserMap = userMap
 
 	allPaths := append(teamMapPaths, userMapPaths...)
 	b.Backend = &framework.Backend{
@@ -98,9 +115,11 @@ func (b *backend) Client(token string) (*github.Client, error) {
 	}
 
 	client := github.NewClient(tc)
+
+	// Set empty upload URL to avoid issues
 	emptyUrl, err := url.Parse("")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse empty URL: %w", err)
 	}
 	client.UploadURL = emptyUrl
 

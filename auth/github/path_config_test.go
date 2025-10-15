@@ -1,11 +1,7 @@
-// Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
-
 package github
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,7 +23,7 @@ func createBackendWithStorage(t *testing.T) (*backend, logical.Storage) {
 	if b == nil {
 		t.Fatalf("failed to create backend")
 	}
-	err := b.Backend.Setup(context.Background(), config)
+	err := b.Setup(context.Background(), config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,22 +36,34 @@ func setupTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var resp string
-		if strings.Contains(r.URL.String(), "/user/orgs") {
+		url := r.URL.String()
+		if strings.Contains(url, "/user/orgs") {
 			resp = string(listOrgResponse)
-		} else if strings.Contains(r.URL.String(), "/user/teams") {
+		} else if strings.Contains(url, "/user/teams") {
 			resp = string(listUserTeamsResponse)
-		} else if strings.Contains(r.URL.String(), "/user") {
+		} else if strings.Contains(url, "/orgs/foo-org/memberships/") {
+			// Mock response for GetOrgMembership API
+			resp = getOrgMembershipResponse
+		} else if strings.Contains(url, "/user") {
 			resp = getUserResponse
-		} else if strings.Contains(r.URL.String(), "/orgs/") {
+		} else if strings.Contains(url, "/orgs/foo-org") {
+			// Mock response for getting organization details
 			resp = getOrgResponse
+		} else if strings.Contains(url, "/orgs/") {
+			// For other organization requests (like old-name), return 404
+			w.WriteHeader(404)
+			if _, err := fmt.Fprintln(w, `{"message": "Not Found"}`); err != nil {
+				t.Logf("failed to write 404 response: %v", err)
+			}
+			return
 		}
 
 		w.Header().Add("Content-Type", "application/json")
-		fmt.Fprintln(w, resp)
+		if _, err := fmt.Fprintln(w, resp); err != nil {
+			t.Logf("failed to write response: %v", err)
+		}
 	}))
-}
-
-// TestGitHub_WriteReadConfig tests that we can successfully read and write
+} // TestGitHub_WriteReadConfig tests that we can successfully read and write
 // the github auth config
 func TestGitHub_WriteReadConfig(t *testing.T) {
 	b, s := createBackendWithStorage(t)
@@ -170,7 +179,9 @@ func TestGitHub_ErrorNoOrgID(t *testing.T) {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add("Content-Type", "application/json")
 			resp := `{ "id": 0 }`
-			fmt.Fprintln(w, resp)
+			if _, err := fmt.Fprintln(w, resp); err != nil {
+				t.Logf("failed to write response: %v", err)
+			}
 		}))
 	}
 
@@ -188,9 +199,9 @@ func TestGitHub_ErrorNoOrgID(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Equal(t, errors.New(
-		"unable to fetch the organization_id, you must manually set it in the config: organization_id not found for foo-org",
-	), err)
+	// Check that the error message contains the expected text (it's now wrapped with more context)
+	assert.Contains(t, err.Error(), "unable to fetch the organization_id for organization 'foo-org'")
+	assert.Contains(t, err.Error(), "organization_id not found for organization 'foo-org'")
 }
 
 // TestGitHub_WriteConfig_ErrorNoOrg tests that an error is returned when the
@@ -207,8 +218,9 @@ func TestGitHub_WriteConfig_ErrorNoOrg(t *testing.T) {
 	})
 
 	assert.NoError(t, err)
+	assert.NotNil(t, resp)
 	assert.Error(t, resp.Error())
-	assert.Equal(t, errors.New("organization is a required parameter"), resp.Error())
+	assert.Contains(t, resp.Error().Error(), "organization is a required parameter")
 }
 
 // https://docs.github.com/en/rest/reference/users#get-the-authenticated-user
@@ -253,3 +265,23 @@ var listUserTeamsResponse = []byte(fmt.Sprintf(`[
     "organization": %v
   }
 ]`, getOrgResponse))
+
+// https://docs.github.com/en/rest/reference/orgs#get-organization-membership-for-a-user
+// Note: many of the fields have been omitted
+var getOrgMembershipResponse = `
+{
+    "url": "https://api.github.com/orgs/foo-org/memberships/user-foo",
+    "state": "active",
+    "role": "member",
+    "organization": {
+        "login": "foo-org",
+        "id": 12345,
+        "type": "Organization"
+    },
+    "user": {
+        "login": "user-foo", 
+        "id": 6789,
+        "type": "User"
+    }
+}
+`
