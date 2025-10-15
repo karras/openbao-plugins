@@ -8,7 +8,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hashicorp/vault/helper/namespace"
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/stretchr/testify/assert"
 )
@@ -63,7 +62,7 @@ func TestGitHub_Login(t *testing.T) {
 // what is set in the config
 func TestGitHub_Login_OrgInvalid(t *testing.T) {
 	b, s := createBackendWithStorage(t)
-	ctx := namespace.RootContext(nil)
+	ctx := context.Background()
 
 	// use a test server to return our mock GH org info
 	ts := setupTestServer(t)
@@ -99,7 +98,7 @@ func TestGitHub_Login_OrgInvalid(t *testing.T) {
 // given config and emit a warning when the organization name has changed
 func TestGitHub_Login_OrgNameChanged(t *testing.T) {
 	b, s := createBackendWithStorage(t)
-	ctx := namespace.RootContext(nil)
+	ctx := context.Background()
 
 	// use a test server to return our mock GH org info
 	ts := setupTestServer(t)
@@ -141,7 +140,7 @@ func TestGitHub_Login_OrgNameChanged(t *testing.T) {
 // config
 func TestGitHub_Login_NoOrgID(t *testing.T) {
 	b, s := createBackendWithStorage(t)
-	ctx := namespace.RootContext(nil)
+	ctx := context.Background()
 
 	// use a test server to return our mock GH org info
 	ts := setupTestServer(t)
