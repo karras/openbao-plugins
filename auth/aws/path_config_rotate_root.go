@@ -177,8 +177,8 @@ func (b *backend) pathConfigRotateRootUpdate(ctx context.Context, req *logical.R
 
 	// Previous cached clients need to be cleared because they may have been made using
 	// the soon-to-be-obsolete credentials.
-	b.IAMClientsMap = make(map[string]map[string]*iam.IAM)
-	b.EC2ClientsMap = make(map[string]map[string]*ec2.EC2)
+	b.IAMClientsMap = make(map[string]map[string]map[string]*iam.IAM)
+	b.EC2ClientsMap = make(map[string]map[string]map[string]*ec2.EC2)
 
 	// Now to clean up the old key.
 	deleteAccessKeyInput := iam.DeleteAccessKeyInput{

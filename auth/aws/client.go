@@ -190,6 +190,12 @@ func (b *backend) stsRoleForAccount(ctx context.Context, s logical.Storage, acco
 	if sts != nil {
 		return sts.StsRole, nil
 	}
+
+	// Return an error if there's no STS config for an account which is not the default one
+	if b.defaultAWSAccountID != "" && b.defaultAWSAccountID != accountID {
+		return "", fmt.Errorf("no STS configuration found for account ID %q", accountID)
+	}
+
 	return "", nil
 }
 
@@ -200,11 +206,15 @@ func (b *backend) clientEC2(ctx context.Context, s logical.Storage, region, acco
 		return nil, err
 	}
 	b.configMutex.RLock()
-	if b.EC2ClientsMap[region] != nil && b.EC2ClientsMap[region][stsRole] != nil {
+	if b.EC2ClientsMap[region] != nil &&
+		b.EC2ClientsMap[region][accountID] != nil &&
+		b.EC2ClientsMap[region][accountID][stsRole] != nil {
 		defer b.configMutex.RUnlock()
 		// If the client object was already created, return it
-		return b.EC2ClientsMap[region][stsRole], nil
+		b.Logger().Debug(fmt.Sprintf("returning cached client for region %s, account %s and stsRole %s", region, accountID, stsRole))
+		return b.EC2ClientsMap[region][accountID][stsRole], nil
 	}
+	b.Logger().Debug(fmt.Sprintf("no cached client for region %s, account %s and stsRole %s", region, accountID, stsRole))
 
 	// Release the read lock and acquire the write lock
 	b.configMutex.RUnlock()
@@ -212,8 +222,10 @@ func (b *backend) clientEC2(ctx context.Context, s logical.Storage, region, acco
 	defer b.configMutex.Unlock()
 
 	// If the client gets created while switching the locks, return it
-	if b.EC2ClientsMap[region] != nil && b.EC2ClientsMap[region][stsRole] != nil {
-		return b.EC2ClientsMap[region][stsRole], nil
+	if b.EC2ClientsMap[region] != nil &&
+		b.EC2ClientsMap[region][accountID] != nil &&
+		b.EC2ClientsMap[region][accountID][stsRole] != nil {
+		return b.EC2ClientsMap[region][accountID][stsRole], nil
 	}
 
 	// Create an AWS config object using a chain of providers
@@ -237,13 +249,16 @@ func (b *backend) clientEC2(ctx context.Context, s logical.Storage, region, acco
 	if client == nil {
 		return nil, fmt.Errorf("could not obtain ec2 client")
 	}
-	if _, ok := b.EC2ClientsMap[region]; !ok {
-		b.EC2ClientsMap[region] = map[string]*ec2.EC2{stsRole: client}
-	} else {
-		b.EC2ClientsMap[region][stsRole] = client
-	}
 
-	return b.EC2ClientsMap[region][stsRole], nil
+	if _, ok := b.EC2ClientsMap[region]; !ok {
+		b.EC2ClientsMap[region] = make(map[string]map[string]*ec2.EC2)
+	}
+	if _, ok := b.EC2ClientsMap[region][accountID]; !ok {
+		b.EC2ClientsMap[region][accountID] = make(map[string]*ec2.EC2)
+	}
+	b.EC2ClientsMap[region][accountID][stsRole] = client
+
+	return b.EC2ClientsMap[region][accountID][stsRole], nil
 }
 
 // clientIAM creates a client to interact with AWS IAM API
@@ -258,13 +273,15 @@ func (b *backend) clientIAM(ctx context.Context, s logical.Storage, region, acco
 		b.Logger().Debug(fmt.Sprintf("found stsRole %s for account %s", stsRole, accountID))
 	}
 	b.configMutex.RLock()
-	if b.IAMClientsMap[region] != nil && b.IAMClientsMap[region][stsRole] != nil {
+	if b.IAMClientsMap[region] != nil &&
+		b.IAMClientsMap[region][accountID] != nil &&
+		b.IAMClientsMap[region][accountID][stsRole] != nil {
 		defer b.configMutex.RUnlock()
 		// If the client object was already created, return it
-		b.Logger().Debug(fmt.Sprintf("returning cached client for region %s and stsRole %s", region, stsRole))
-		return b.IAMClientsMap[region][stsRole], nil
+		b.Logger().Debug(fmt.Sprintf("returning cached client for region %s, account %s and stsRole %s", region, accountID, stsRole))
+		return b.IAMClientsMap[region][accountID][stsRole], nil
 	}
-	b.Logger().Debug(fmt.Sprintf("no cached client for region %s and stsRole %s", region, stsRole))
+	b.Logger().Debug(fmt.Sprintf("no cached client for region %s, account %s and stsRole %s", region, accountID, stsRole))
 
 	// Release the read lock and acquire the write lock
 	b.configMutex.RUnlock()
@@ -272,8 +289,10 @@ func (b *backend) clientIAM(ctx context.Context, s logical.Storage, region, acco
 	defer b.configMutex.Unlock()
 
 	// If the client gets created while switching the locks, return it
-	if b.IAMClientsMap[region] != nil && b.IAMClientsMap[region][stsRole] != nil {
-		return b.IAMClientsMap[region][stsRole], nil
+	if b.IAMClientsMap[region] != nil &&
+		b.IAMClientsMap[region][accountID] != nil &&
+		b.IAMClientsMap[region][accountID][stsRole] != nil {
+		return b.IAMClientsMap[region][accountID][stsRole], nil
 	}
 
 	// Create an AWS config object using a chain of providers
@@ -297,10 +316,14 @@ func (b *backend) clientIAM(ctx context.Context, s logical.Storage, region, acco
 	if client == nil {
 		return nil, fmt.Errorf("could not obtain iam client")
 	}
+
 	if _, ok := b.IAMClientsMap[region]; !ok {
-		b.IAMClientsMap[region] = map[string]*iam.IAM{stsRole: client}
-	} else {
-		b.IAMClientsMap[region][stsRole] = client
+		b.IAMClientsMap[region] = make(map[string]map[string]*iam.IAM)
 	}
-	return b.IAMClientsMap[region][stsRole], nil
+	if _, ok := b.IAMClientsMap[region][accountID]; !ok {
+		b.IAMClientsMap[region][accountID] = make(map[string]*iam.IAM)
+	}
+	b.IAMClientsMap[region][accountID][stsRole] = client
+
+	return b.IAMClientsMap[region][accountID][stsRole], nil
 }
