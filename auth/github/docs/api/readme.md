@@ -8,7 +8,7 @@ description: This is the API documentation for the OpenBao GitHub auth method.
 
 This is the API documentation for the OpenBao GitHub auth method. For
 general information about the usage and operation of the GitHub method, please
-see the [OpenBao GitHub method documentation](/bao/docs/auth/github).
+see the [OpenBao GitHub method documentation](../readmde.md).
 
 This documentation assumes the GitHub method is enabled at the `/auth/github`
 path in OpenBao. Since it is possible to enable auth methods at any location,
@@ -31,14 +31,6 @@ distinction between the `create` and `update` capabilities inside ACL policies.
   of. OpenBao will attempt to fetch and set this value if it is not provided.
 - `base_url` `(string: "")` - The API endpoint to use. Useful if you are running
   GitHub Enterprise or an API-compatible authentication server.
-
-### Environment variables
-- `VAULT_AUTH_CONFIG_GITHUB_TOKEN` `(string: "")` - An optional GitHub token used to make
-  authenticated GitHub API requests. This can be useful for bypassing GitHub's
-  rate-limiting during automation flows when the `organization_id` is not provided.
-  We encourage you to provide the `organization_id` instead of relying on this environment variable.
-
-@include 'tokenfields.mdx'
 
 ### Sample payload
 

@@ -16,7 +16,7 @@ uses personal access tokens. If the risks below are unacceptable to you, conside
 using a different authentication method.
 
 ~> Any valid GitHub access token with the `read:org` scope for any user belonging
-to the Vault-configured organization can be used for authentication. If such a
+to the OpenBao-configured organization can be used for authentication. If such a
 token is stolen from a third party service, and the attacker is able to make
 network calls to OpenBao, they will be able to log in as the user that generated
 the access token.
@@ -77,7 +77,7 @@ management tool.
 1. Use the `/config` endpoint to configure OpenBao to talk to GitHub.
 
    ```text
-   $ bao write auth/github/config organization=hashicorp
+   $ bao write auth/github/config organization=openbao
    ```
 
    For the complete list of configuration options, please see the API
@@ -109,5 +109,5 @@ management tool.
 ## API
 
 The GitHub auth method has a full HTTP API. Please see the
-[GitHub Auth API](/bao/api-docs/auth/github) for more
+[GitHub Auth API](./api/readme.md) for more
 details.
