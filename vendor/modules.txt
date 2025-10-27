@@ -628,6 +628,9 @@ github.com/google/go-cmp/cmp/internal/diff
 github.com/google/go-cmp/cmp/internal/flags
 github.com/google/go-cmp/cmp/internal/function
 github.com/google/go-cmp/cmp/internal/value
+# github.com/google/go-github v17.0.0+incompatible
+## explicit
+github.com/google/go-github/github
 # github.com/google/go-metrics-stackdriver v0.2.0
 ## explicit; go 1.12
 github.com/google/go-metrics-stackdriver
@@ -778,6 +781,9 @@ github.com/hashicorp/go-secure-stdlib/mlock
 # github.com/hashicorp/go-secure-stdlib/parseutil v0.2.0
 ## explicit; go 1.20
 github.com/hashicorp/go-secure-stdlib/parseutil
+# github.com/hashicorp/go-secure-stdlib/password v0.1.4
+## explicit; go 1.23.0
+github.com/hashicorp/go-secure-stdlib/password
 # github.com/hashicorp/go-secure-stdlib/reloadutil v0.1.1
 ## explicit; go 1.16
 github.com/hashicorp/go-secure-stdlib/reloadutil
@@ -1537,6 +1543,7 @@ golang.org/x/crypto/sha3
 golang.org/x/crypto/ssh
 golang.org/x/crypto/ssh/agent
 golang.org/x/crypto/ssh/internal/bcrypt_pbkdf
+golang.org/x/crypto/ssh/terminal
 # golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b
 ## explicit; go 1.24.0
 golang.org/x/exp/slices

@@ -20,6 +20,7 @@ require (
 	github.com/go-test/deep v1.1.1
 	github.com/golang/mock v1.6.0
 	github.com/golang/protobuf v1.5.4
+	github.com/google/go-github v17.0.0+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/consul/api v1.32.1
 	github.com/hashicorp/errwrap v1.1.0
@@ -31,6 +32,7 @@ require (
 	github.com/hashicorp/go-secure-stdlib/awsutil v0.3.0
 	github.com/hashicorp/go-secure-stdlib/base62 v0.1.2
 	github.com/hashicorp/go-secure-stdlib/parseutil v0.2.0
+	github.com/hashicorp/go-secure-stdlib/password v0.1.4
 	github.com/hashicorp/go-secure-stdlib/strutil v0.1.2
 	github.com/hashicorp/go-secure-stdlib/tlsutil v0.1.3
 	github.com/hashicorp/go-sockaddr v1.0.7
